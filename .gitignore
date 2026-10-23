@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Local config and data — never commit recordings
+dndsteno.toml
+sessions/
+*.wav
+*.flac
+*.mp3
+*.ogg
+*.m4a
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

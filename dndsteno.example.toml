@@ -1,0 +1,31 @@
+# Скопируйте в dndsteno.toml и поправьте под себя.
+# Все поля необязательные — здесь показаны значения по умолчанию.
+
+# Папка, где лежат сессии: sessions/<дата>/audio, transcript.md, ...
+sessions_dir = "sessions"
+
+[record]
+# Имя (или часть имени) или номер микрофона. Пусто — системный по умолчанию.
+# Список устройств: steno devices
+device = ""
+# 16 кГц моно — ровно то, что нужно Whisper. Если устройство не умеет,
+# запись пойдёт на его родной частоте.
+samplerate = 16000
+# Длина одного файла записи. Если что-то упадёт, потеряется максимум один кусок.
+chunk_minutes = 20
+
+[transcribe]
+# tiny | base | small | medium | large-v3 | large-v3-turbo
+model = "large-v3-turbo"
+# cpu | cuda | auto
+device = "cpu"
+# int8 — быстро на CPU; на NVIDIA можно float16
+compute_type = "int8"
+language = "ru"
+beam_size = 5
+# Вырезать тишину перед распознаванием (меньше галлюцинаций, быстрее)
+vad = true
+# Имена персонажей, NPC, локаций — Whisper будет писать их правильно.
+glossary = []
+# Или файл со словарём: по одному слову/имени на строку.
+glossary_file = ""
