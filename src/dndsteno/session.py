@@ -5,6 +5,10 @@ sessions/<name>/
     transcript/part_001.json, ...      per-part cache, lets a long run resume
     transcript.json                    merged segments with absolute timestamps
     transcript.md                      readable text
+    summary/chunk_001.json, ...        per-chunk LLM cache
+    summary.json                       session summary + facts per note
+    obsidian_backup/                   vault notes as they were before appending
+    obsidian_applied.json              log of changes written to the vault
 """
 
 from __future__ import annotations
@@ -42,6 +46,23 @@ class Session:
     @property
     def transcript_md(self) -> Path:
         return self.root / "transcript.md"
+
+    @property
+    def summary_parts_dir(self) -> Path:
+        return self.root / "summary"
+
+    @property
+    def summary_json(self) -> Path:
+        return self.root / "summary.json"
+
+    @property
+    def obsidian_backup_dir(self) -> Path:
+        """Copies of vault notes taken right before they were appended to."""
+        return self.root / "obsidian_backup"
+
+    @property
+    def obsidian_log(self) -> Path:
+        return self.root / "obsidian_applied.json"
 
     def audio_files(self) -> list[Path]:
         """Audio files in recording order (sorted by name: part_001, part_002, ...)."""

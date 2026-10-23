@@ -124,6 +124,50 @@ def cmd_transcribe(cfg: Config, args) -> int:
     return 0
 
 
+def _session_arg(cfg: Config, name: str | None) -> Session:
+    session = open_session(cfg.sessions_dir, name) if name else latest_session(cfg.sessions_dir)
+    if session is None or not session.root.exists():
+        raise SystemExit("Сессия не найдена.")
+    return session
+
+
+def cmd_summarize(cfg: Config, args) -> int:
+    from dndsteno.pipeline import summarize
+    from dndsteno.summarize import SummaryProgress
+
+    session = _session_arg(cfg, args.session)
+    names = {"map": "кусок", "reduce": "итог", "dedupe": "сверка статей"}
+
+    def on_progress(p: SummaryProgress):
+        tail = " (кэш)" if p.cached else f" · {p.chars} симв." if p.chars else ""
+        print(f"\r  {names[p.stage]} {p.index}/{p.count}{tail}          ", end="", flush=True)
+
+    print(f"Саммари сессии {session.name} через {cfg.llm.base_url}")
+    summary = summarize(cfg, session, force=args.force, on_progress=on_progress)
+    print(f"\n\n{summary.get('title', '')}")
+    for t in summary.get("tldr", []):
+        print(f"  - {t}")
+    print(f"\nСтатей с новыми фактами: {len(summary.get('entities', []))}. Записать: steno obsidian {session.name}")
+    return 0
+
+
+def cmd_obsidian(cfg: Config, args) -> int:
+    from dndsteno.pipeline import apply_obsidian, plan_obsidian
+
+    session = _session_arg(cfg, args.session)
+    changes = plan_obsidian(cfg, session)
+    for ch in changes:
+        mark = "✔" if ch.status == "done" else "+" if ch.action == "append" else "new"
+        print(f"  [{mark}] {ch.title}  →  {ch.rel_path}")
+    pending = [c for c in changes if c.status != "done"]
+    if not args.apply:
+        print(f"\nК записи: {len(pending)}. Записать: steno obsidian {session.name} --apply")
+        return 0
+    for ch, result in apply_obsidian(cfg, session, pending):
+        print(f"  {result}: {ch.rel_path}")
+    return 0
+
+
 def cmd_gui(cfg: Config, args) -> int:
     from dndsteno.gui.app import run
 
@@ -148,6 +192,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", help="переопределить модель Whisper из конфига")
     p.add_argument("--force", action="store_true", help="игнорировать кэш, расшифровать заново")
     p.set_defaults(func=cmd_transcribe)
+
+    p = sub.add_parser("summarize", help="саммари сессии через нейросеть (LM Studio)")
+    p.add_argument("session", nargs="?", help="имя сессии (по умолчанию последняя)")
+    p.add_argument("--force", action="store_true", help="не использовать сохранённые результаты")
+    p.set_defaults(func=cmd_summarize)
+
+    p = sub.add_parser("obsidian", help="показать (и записать) изменения для Obsidian")
+    p.add_argument("session", nargs="?", help="имя сессии (по умолчанию последняя)")
+    p.add_argument("--apply", action="store_true", help="записать все изменения в vault")
+    p.set_defaults(func=cmd_obsidian)
 
     sub.add_parser("gui", help="открыть окно программы").set_defaults(func=cmd_gui)
 

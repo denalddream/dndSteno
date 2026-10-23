@@ -16,7 +16,11 @@ src/dndsteno/
   session.py      session folder layout (audio/, transcript/, transcript.md, ...)
   recorder.py     mic -> chunked FLAC on disk
   transcriber.py  faster-whisper, per-part JSON cache, Cancelled exception
-  pipeline.py     high-level operations both front ends call (transcribe(...))
+  llm.py          OpenAI-compatible client (LM Studio), streaming, JSON-schema replies
+  vault.py        read-only index of campaign notes; name resolution (cases, ё, aliases)
+  summarize.py    transcript -> summary.json (map per chunk, reduce, dedupe facts vs notes)
+  obsidian.py     summary -> Change list; APPEND-ONLY writer into the vault
+  pipeline.py     high-level operations both front ends call (transcribe, summarize, plan/apply_obsidian)
   cli.py          argparse front end
   gui/            PySide6 front end — presentation only
     context.py    AppContext: config, jobs, signals (config_changed, session_changed, navigate)
@@ -35,7 +39,13 @@ Rules:
    be rerun independently. New outputs get a property on `Session`.
 3. **Anything slower than ~100 ms runs as a job**: `ctx.jobs.start(title, fn, kind=..., meta={"session": name})`.
    Copy config (`copy.deepcopy`) before handing it to a worker thread.
-4. **Pages don't call each other.** Use `ctx.navigate(page_id, **kwargs)` and
+4. **The Obsidian vault is the user's handwritten work. Never delete or rewrite it.**
+   Only `obsidian.py` writes there: append a marked `> [!ai]` callout with the
+   `%% dndsteno:session=… %%` marker, create files exclusively, back up before changing,
+   verify the old bytes are a prefix of the new. The LLM returns JSON only and never
+   touches files. Changes go through the preview in the GUI. Tests in tests/test_obsidian.py
+   guard this — keep them passing, and test on a copy of the vault, never the real one.
+5. **Pages don't call each other.** Use `ctx.navigate(page_id, **kwargs)` and
    `ctx.session_changed.emit(name)` after writing into a session.
 
 ## How to add things

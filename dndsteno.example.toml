@@ -32,3 +32,21 @@ vad = true
 glossary = []
 # Или файл со словарём: по одному слову/имени на строку.
 glossary_file = ""
+
+[llm]
+# OpenAI-совместимый сервер. LM Studio: Developer → Start Server.
+base_url = "http://127.0.0.1:1234/v1"
+# Пусто — модель, которая сейчас загружена в LM Studio.
+model = ""
+temperature = 0.3
+# Расшифровка режется на куски такой длины (12000 символов ≈ 5–6 тыс. токенов).
+# Контекст модели в LM Studio должен быть заметно больше — от 16384.
+chunk_chars = 12000
+timeout = 900
+
+[obsidian]
+vault_dir = ""                  # например C:\Users\...\Obsidian Vault\DnD
+campaign_dir = ""               # папка кампании внутри vault, например «Большой куш»
+sessions_dir = "Сессии"         # куда писать заметки о сессиях (внутри кампании)
+new_notes_dir = "Новое от нейросети"
+callout = "ai"                  # блоки нейросети: > [!ai]

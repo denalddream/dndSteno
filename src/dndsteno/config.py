@@ -67,6 +67,34 @@ class TranscribeConfig:
 
 
 @dataclass
+class LLMConfig:
+    base_url: str = opt("http://127.0.0.1:1234/v1", "Адрес сервера",
+                        "OpenAI-совместимый сервер: LM Studio → Developer → Start Server.")
+    model: str = opt("", "Модель", "Идентификатор модели в LM Studio. Пусто — та, что сейчас загружена.")
+    temperature: float = opt(0.3, "Температура", "Меньше — суше и точнее, больше — живее и фантазийнее.")
+    chunk_chars: int = opt(12000, "Размер куска, символов",
+                           "Расшифровка режется на куски такой длины. Больше — меньше запросов, "
+                           "но нужен больший контекст модели (12000 ≈ 5–6 тыс. токенов).")
+    timeout: int = opt(900, "Таймаут запроса, сек", "Сколько ждать ответа на один кусок.")
+    max_tokens: int = opt(8000, "Макс. длина ответа, токенов",
+                          "Защита от зацикливания модели. У «думающих» моделей сюда входят и рассуждения.")
+
+
+@dataclass
+class ObsidianConfig:
+    vault_dir: str = opt("", "Папка vault", "Папка Obsidian-хранилища.", kind="dir")
+    campaign_dir: str = opt("", "Папка кампании",
+                            "Внутри vault, например «Большой куш». Здесь ищутся существующие статьи.")
+    sessions_dir: str = opt("Сессии", "Папка отчётов", "Внутри папки кампании: сюда пишутся заметки о сессиях.")
+    new_notes_dir: str = opt("Новое от нейросети", "Папка новых статей",
+                             "Внутри папки кампании: сюда создаются предложенные новые NPC, места и т.п. "
+                             "Потом их можно разложить по папкам вручную.")
+    callout: str = opt("ai", "Тип пометки",
+                       "Блоки нейросети оформляются как > [!ai]. Цвет можно настроить CSS-сниппетом.")
+
+
+
+@dataclass
 class GeneralConfig:
     sessions_dir: str = opt("sessions", "Папка сессий", "Здесь хранятся записи и расшифровки.", kind="dir")
 
@@ -76,6 +104,8 @@ SECTIONS: dict[str, tuple[str, type]] = {
     "general": ("Общие", GeneralConfig),
     "record": ("Запись", RecordConfig),
     "transcribe": ("Расшифровка", TranscribeConfig),
+    "llm": ("Нейросеть (саммари)", LLMConfig),
+    "obsidian": ("Obsidian", ObsidianConfig),
 }
 
 
@@ -84,6 +114,8 @@ class Config:
     general: GeneralConfig = field(default_factory=GeneralConfig)
     record: RecordConfig = field(default_factory=RecordConfig)
     transcribe: TranscribeConfig = field(default_factory=TranscribeConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
+    obsidian: ObsidianConfig = field(default_factory=ObsidianConfig)
     # Where the config lives (or will be saved); relative paths resolve against its folder.
     path: Path = Path(DEFAULT_CONFIG_NAME)
 
@@ -91,10 +123,22 @@ class Config:
     def base_dir(self) -> Path:
         return self.path.resolve().parent
 
+    def _resolve(self, value: str) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else self.base_dir / path
+
     @property
     def sessions_dir(self) -> Path:
-        path = Path(self.general.sessions_dir)
-        return path if path.is_absolute() else self.base_dir / path
+        return self._resolve(self.general.sessions_dir)
+
+    @property
+    def vault_path(self) -> Path | None:
+        return self._resolve(self.obsidian.vault_dir) if self.obsidian.vault_dir else None
+
+    @property
+    def campaign_path(self) -> Path | None:
+        vault = self.vault_path
+        return vault / self.obsidian.campaign_dir if vault else None
 
 
 def _build(cls, data: dict, section: str):

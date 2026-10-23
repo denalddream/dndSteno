@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Signal
 
-from dndsteno.transcriber import Cancelled
+from dndsteno.errors import Cancelled
 
 log = logging.getLogger(__name__)
 

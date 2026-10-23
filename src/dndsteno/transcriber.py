@@ -18,6 +18,7 @@ from typing import Callable
 import numpy as np
 
 from dndsteno.config import TranscribeConfig
+from dndsteno.errors import Cancelled  # noqa: F401  (re-exported for callers)
 
 # New paragraph in the markdown after a pause this long, or once a paragraph gets this long.
 PARAGRAPH_GAP = 2.0
@@ -84,10 +85,6 @@ def build_prompts(glossary: list[str]) -> tuple[str, str | None]:
             break
         hotwords = candidate
     return f"{initial} Имена и названия: {hotwords}.", hotwords
-
-
-class Cancelled(Exception):
-    """Raised inside a long operation when its cancel event is set."""
 
 
 # Loaded models by (name, device, compute_type): loading large-v3-turbo takes

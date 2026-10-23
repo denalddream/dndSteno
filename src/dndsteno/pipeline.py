@@ -11,8 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dndsteno.config import Config
+from dndsteno.llm import LLMClient
+from dndsteno.obsidian import Change, apply_changes, plan_changes
 from dndsteno.session import Session
+from dndsteno.summarize import ProgressCallback as SummaryProgressCallback
+from dndsteno.summarize import load_summary, summarize_session
 from dndsteno.transcriber import ProgressCallback, Transcriber, write_outputs
+from dndsteno.vault import VaultIndex
 
 
 @dataclass
@@ -52,3 +57,40 @@ def transcribe(
                                             on_progress=on_progress)
     write_outputs(segments, job.json_out, job.md_out, job.title)
     return job.md_out
+
+
+def vault_index(cfg: Config) -> VaultIndex | None:
+    """Index of the campaign notes, excluding our own session reports; None if no vault is set."""
+    campaign = cfg.campaign_path
+    if campaign is None or not campaign.is_dir():
+        return None
+    return VaultIndex(campaign, exclude=[campaign / cfg.obsidian.sessions_dir])
+
+
+def summarize(
+    cfg: Config,
+    session: Session,
+    force: bool = False,
+    on_progress: SummaryProgressCallback | None = None,
+    cancel: threading.Event | None = None,
+) -> dict:
+    """Session summary + facts per note into summary.json. Needs a transcript and a running LLM server."""
+    if not session.transcript_json.exists():
+        raise FileNotFoundError("Сначала расшифруйте сессию.")
+    client = LLMClient(cfg.llm, cancel=cancel)
+    return summarize_session(cfg, session, client, vault_index(cfg), force=force, on_progress=on_progress)
+
+
+def plan_obsidian(cfg: Config, session: Session) -> list[Change]:
+    summary = load_summary(session)
+    if summary is None:
+        raise FileNotFoundError("Сначала сделайте саммари.")
+    index = vault_index(cfg)
+    if index is None:
+        raise FileNotFoundError("Не найдена папка кампании в vault (Настройки → Obsidian).")
+    return plan_changes(cfg, session, summary, index)
+
+
+def apply_obsidian(cfg: Config, session: Session, changes: list[Change]) -> list[tuple[Change, str]]:
+    """Write the chosen changes into the vault (append-only; see obsidian.py)."""
+    return apply_changes(cfg, session, [c for c in changes if c.status != "done"])
