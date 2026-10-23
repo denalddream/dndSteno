@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -85,21 +86,45 @@ def build_prompts(glossary: list[str]) -> tuple[str, str | None]:
     return f"{initial} Имена и названия: {hotwords}.", hotwords
 
 
+class Cancelled(Exception):
+    """Raised inside a long operation when its cancel event is set."""
+
+
+# Loaded models by (name, device, compute_type): loading large-v3-turbo takes
+# seconds and ~1.6 GB of RAM, so repeated runs in one process share it.
+_MODELS: dict[tuple[str, str, str], object] = {}
+_MODELS_LOCK = threading.Lock()
+
+
+def get_model(cfg: TranscribeConfig):
+    key = (cfg.model, cfg.device, cfg.compute_type)
+    with _MODELS_LOCK:
+        if key not in _MODELS:
+            from faster_whisper import WhisperModel
+
+            _MODELS.clear()  # keep at most one model in memory
+            _MODELS[key] = WhisperModel(cfg.model, device=cfg.device, compute_type=cfg.compute_type)
+        return _MODELS[key]
+
+
 class Transcriber:
-    def __init__(self, cfg: TranscribeConfig, glossary: list[str] | None = None):
+    def __init__(
+        self,
+        cfg: TranscribeConfig,
+        glossary: list[str] | None = None,
+        cancel: threading.Event | None = None,
+    ):
         self.cfg = cfg
         self.initial_prompt, self.hotwords = build_prompts(glossary or [])
-        self._model = None
+        self.cancel = cancel or threading.Event()
+
+    def _check_cancel(self) -> None:
+        if self.cancel.is_set():
+            raise Cancelled()
 
     @property
     def model(self):
-        if self._model is None:
-            from faster_whisper import WhisperModel
-
-            self._model = WhisperModel(
-                self.cfg.model, device=self.cfg.device, compute_type=self.cfg.compute_type,
-            )
-        return self._model
+        return get_model(self.cfg)
 
     def transcribe_file(
         self, path: Path, on_position: Callable[[float, float], None] | None = None,
@@ -107,6 +132,7 @@ class Transcriber:
         """Transcribe one file. Returns (segments, duration in seconds)."""
         from faster_whisper import decode_audio
 
+        self._check_cancel()
         audio = normalize(decode_audio(str(path), sampling_rate=SAMPLE_RATE))
         segments_iter, info = self.model.transcribe(
             audio,
@@ -122,6 +148,7 @@ class Transcriber:
         )
         segments = []
         for s in segments_iter:  # lazy: decoding happens while iterating
+            self._check_cancel()
             text = s.text.strip()
             if text and not is_hallucination(text):
                 segments.append(Segment(round(s.start, 2), round(s.end, 2), text))

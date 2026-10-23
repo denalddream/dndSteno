@@ -10,6 +10,7 @@ sessions/<name>/
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -51,6 +52,39 @@ class Session:
             if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
         )
 
+    def audio_duration(self) -> float:
+        """Total length of all parts in seconds (formats soundfile can't read count as 0)."""
+        import soundfile as sf
+
+        total = 0.0
+        for f in self.audio_files():
+            try:
+                total += sf.info(str(f)).duration
+            except RuntimeError:
+                pass
+        return total
+
+    @property
+    def status(self) -> str:
+        """'empty' (no audio), 'recorded', 'transcribed', or 'stale' (audio added after transcription)."""
+        audio = self.audio_files()
+        if not audio:
+            return "empty"
+        if not self.transcript_md.exists():
+            return "recorded"
+        newest_audio = max(f.stat().st_mtime for f in audio)
+        return "stale" if newest_audio > self.transcript_md.stat().st_mtime else "transcribed"
+
+    def import_audio(self, paths: list[Path]) -> list[Path]:
+        """Copy external audio files in as the next parts, keeping their format."""
+        self.audio_dir.mkdir(parents=True, exist_ok=True)
+        added = []
+        for src in paths:
+            dst = self.next_part_path(src.suffix.lower())
+            shutil.copy2(src, dst)
+            added.append(dst)
+        return added
+
     def next_part_path(self, ext: str = ".flac") -> Path:
         """Path for the next recording part; continues numbering if the session already has parts."""
         numbers = [
@@ -67,6 +101,14 @@ def default_session_name() -> str:
 
 def open_session(sessions_dir: Path, name: str | None = None) -> Session:
     return Session(sessions_dir / (name or default_session_name()))
+
+
+def list_sessions(sessions_dir: Path) -> list[Session]:
+    """All session folders, newest name first (names default to ISO dates)."""
+    if not sessions_dir.exists():
+        return []
+    return sorted((Session(p) for p in sessions_dir.iterdir() if p.is_dir()),
+                  key=lambda s: s.name, reverse=True)
 
 
 def latest_session(sessions_dir: Path) -> Session | None:

@@ -1,44 +1,31 @@
-"""Command line: steno devices | record | transcribe."""
+"""Command line: steno devices | record | transcribe | gui."""
 
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 import threading
 import time
 from pathlib import Path
 
 from dndsteno.config import Config, load_config
+from dndsteno.fmt import FLOOR_DB, QUIET_DB, fmt_duration, peak_db
 from dndsteno.session import AUDIO_EXTENSIONS, Session, latest_session, open_session
 
 
-def _fmt_duration(seconds: float) -> str:
-    seconds = int(seconds)
-    return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
-
-
-QUIET_DB = -30  # speech peaking below this is too quiet for reliable recognition
-
-
-def _level_bar(peak: float, width: int = 20, floor_db: float = -60) -> str:
+def _level_bar(peak: float, width: int = 20) -> str:
     """Peak meter on a dB scale: a linear bar shows nothing for a typical quiet mic."""
-    db = 20 * math.log10(peak) if peak > 0 else floor_db
-    filled = round(width * (max(db, floor_db) - floor_db) / -floor_db)
-    return f"{'█' * filled}{'·' * (width - filled)} {max(db, floor_db):4.0f} дБ"
+    db = peak_db(peak)
+    filled = round(width * (db - FLOOR_DB) / -FLOOR_DB)
+    return f"{'█' * filled}{'·' * (width - filled)} {db:4.0f} дБ"
 
 
 def cmd_devices(cfg: Config, args) -> int:
-    import sounddevice as sd
+    from dndsteno.recorder import list_input_devices
 
-    default_in = sd.default.device[0]
-    for i, dev in enumerate(sd.query_devices()):
-        if dev["max_input_channels"] < 1:
-            continue
-        hostapi = sd.query_hostapis(dev["hostapi"])["name"]
-        mark = "*" if i == default_in else " "
-        name = " ".join(dev["name"].split())  # some drivers put newlines into names
-        print(f"{mark} {i:3d}  {name}  [{hostapi}, {int(dev['default_samplerate'])} Гц]")
+    for d in list_input_devices():
+        mark = "*" if d.is_default else " "
+        print(f"{mark} {d.index:3d}  {d.name}  [{d.hostapi}, {d.samplerate} Гц]")
     print("\n* — устройство по умолчанию. В dndsteno.toml: [record] device = \"<номер или имя>\"")
     return 0
 
@@ -60,17 +47,17 @@ def cmd_record(cfg: Config, args) -> int:
 
     print(f"Сессия: {session.root}")
     print("Запись идёт. Enter или Ctrl+C — остановить.")
-    print(f"Скажите что-нибудь: если при речи уровень ниже {QUIET_DB} дБ — "
+    print(f"Скажите что-нибудь: если при речи уровень ниже {QUIET_DB:.0f} дБ — "
           "прибавьте громкость микрофона в настройках Windows.\n")
 
     def on_status(st: RecordStatus):
         name = st.current_file.name if st.current_file else "—"
         warn = f"  потери буфера: {st.overflows}" if st.overflows else ""
-        print(f"\r  {_fmt_duration(st.seconds)}  {_level_bar(st.peak)}  {name}{warn}   ",
+        print(f"\r  {fmt_duration(st.seconds)}  {_level_bar(st.peak)}  {name}{warn}   ",
               end="", flush=True)
 
     result = record(session, cfg.record, stop, on_status)
-    print(f"\n\nЗаписано {_fmt_duration(result.seconds)} ({result.samplerate} Гц):")
+    print(f"\n\nЗаписано {fmt_duration(result.seconds)} ({result.samplerate} Гц):")
     for f in result.files:
         print(f"  {f}")
     if result.overflows:
@@ -78,39 +65,38 @@ def cmd_record(cfg: Config, args) -> int:
     return 0
 
 
-def _resolve_target(cfg: Config, target: str | None) -> tuple[list[Path], Path, Path, Path, str]:
-    """(audio files, cache dir, json out, md out, title) for a session name/dir or a single audio file."""
+def _resolve_target(cfg: Config, target: str | None):
+    from dndsteno.pipeline import TranscribeJob
+
     if target:
         path = Path(target)
         if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
-            return ([path], path.parent / f"{path.stem}.parts",
-                    path.with_suffix(".json"), path.with_suffix(".md"), path.stem)
+            return TranscribeJob.for_file(path)
         session = Session(path) if path.is_dir() else open_session(cfg.sessions_dir, target)
     else:
         session = latest_session(cfg.sessions_dir)
         if session is None:
             raise SystemExit(f"В {cfg.sessions_dir} нет сессий с аудио. Укажите сессию или файл.")
-
-    files = session.audio_files()
-    if not files:
-        raise SystemExit(f"В {session.audio_dir} нет аудиофайлов.")
-    return (files, session.parts_dir, session.transcript_json, session.transcript_md,
-            f"Сессия {session.name}")
+    try:
+        return TranscribeJob.for_session(session)
+    except FileNotFoundError as e:
+        raise SystemExit(str(e))
 
 
 def cmd_transcribe(cfg: Config, args) -> int:
-    from dndsteno.transcriber import Progress, Transcriber, write_outputs
+    from dndsteno.pipeline import transcribe
+    from dndsteno.transcriber import Progress
 
     if args.model:
         cfg.transcribe.model = args.model
-    files, cache_dir, json_out, md_out, title = _resolve_target(cfg, args.target)
+    job = _resolve_target(cfg, args.target)
     glossary = cfg.transcribe.load_glossary(cfg.base_dir)
 
     t = cfg.transcribe
     print(f"Модель: {t.model} ({t.device}, {t.compute_type}), язык: {t.language or 'авто'}")
     if glossary:
         print(f"Словарь имён и названий: {len(glossary)}")
-    print(f"Файлов: {len(files)}\n")
+    print(f"Файлов: {len(job.audio_files)}\n")
 
     started = time.monotonic()
     current_part = 0
@@ -126,19 +112,22 @@ def cmd_transcribe(cfg: Config, args) -> int:
         pct = 100 * p.position / p.duration if p.duration else 0
         elapsed = time.monotonic() - started
         print(f"\r  [{p.part_index}/{p.part_count}] {p.part_name}: {pct:5.1f}%  "
-              f"({_fmt_duration(p.position)} из {_fmt_duration(p.duration)}, прошло {_fmt_duration(elapsed)})",
+              f"({fmt_duration(p.position)} из {fmt_duration(p.duration)}, прошло {fmt_duration(elapsed)})",
               end="", flush=True)
 
     print("Загрузка модели (первый раз она скачивается, это долго)...")
-    transcriber = Transcriber(cfg.transcribe, glossary)
-    segments = transcriber.transcribe_parts(files, cache_dir, force=args.force, on_progress=on_progress)
+    md = transcribe(cfg, job, force=args.force, on_progress=on_progress)
     print("\n")
-
-    write_outputs(segments, json_out, md_out, title)
-    print(f"Готово за {_fmt_duration(time.monotonic() - started)}:")
-    print(f"  {md_out}")
-    print(f"  {json_out}")
+    print(f"Готово за {fmt_duration(time.monotonic() - started)}:")
+    print(f"  {md}")
+    print(f"  {job.json_out}")
     return 0
+
+
+def cmd_gui(cfg: Config, args) -> int:
+    from dndsteno.gui.app import run
+
+    return run(cfg)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -160,11 +149,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="игнорировать кэш, расшифровать заново")
     p.set_defaults(func=cmd_transcribe)
 
+    sub.add_parser("gui", help="открыть окно программы").set_defaults(func=cmd_gui)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    if sys.platform == "win32":
+    if sys.platform == "win32" and sys.stdout:
         # Cyrillic and progress bars in the Windows console.
         sys.stdout.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(argv)

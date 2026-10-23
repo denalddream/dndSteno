@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -6,7 +7,7 @@ import pytest
 import soundfile as sf
 
 from dndsteno.cli import _level_bar
-from dndsteno.config import TranscribeConfig, load_config
+from dndsteno.config import TranscribeConfig, load_config, save_config
 from dndsteno.recorder import ChunkedWriter
 from dndsteno.session import Session, latest_session
 from dndsteno.transcriber import (
@@ -29,6 +30,32 @@ def test_config_defaults_and_overrides(tmp_path: Path):
     assert cfg.record.samplerate == 16000
     assert cfg.transcribe.model == "small"
     assert cfg.transcribe.load_glossary(cfg.base_dir) == ["Эльдрин", "Барак", "Гримтоф"]
+
+
+def test_config_save_roundtrip(tmp_path: Path):
+    cfg = load_config(tmp_path / "dndsteno.toml")
+    assert not cfg.path.exists() and cfg.sessions_dir == tmp_path / "sessions"
+    cfg.transcribe.glossary = ["Барак"]
+    cfg.record.device = "Микрофон [MME]"
+    save_config(cfg)
+    again = load_config(cfg.path)
+    assert again.transcribe.glossary == ["Барак"]
+    assert again.record.device == "Микрофон [MME]"
+
+
+def test_session_status_and_import(tmp_path: Path):
+    s = Session(tmp_path / "s")
+    assert s.status == "empty"
+    src = tmp_path / "phone.mp3"
+    src.write_bytes(b"id3")
+    (added,) = s.import_audio([src])
+    assert added.name == "part_001.mp3" and s.status == "recorded"
+    s.transcript_md.write_text("x", encoding="utf-8")
+    assert s.status == "transcribed"
+    later = s.audio_dir / "part_002.flac"
+    later.touch()
+    os.utime(later, (s.transcript_md.stat().st_mtime + 10,) * 2)
+    assert s.status == "stale"
 
 
 def test_config_rejects_typos(tmp_path: Path):

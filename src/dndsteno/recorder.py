@@ -78,11 +78,48 @@ class RecordResult:
     overflows: int = 0
 
 
+@dataclass
+class InputDevice:
+    index: int
+    name: str
+    hostapi: str
+    samplerate: int
+    is_default: bool
+
+    @property
+    def key(self) -> str:
+        """Stable id for the config: indices shift when e.g. Bluetooth headphones connect."""
+        return f"{self.name} [{self.hostapi}]"
+
+
+def list_input_devices() -> list[InputDevice]:
+    import sounddevice as sd
+
+    default_in = sd.default.device[0]
+    return [
+        InputDevice(
+            index=i,
+            name=" ".join(dev["name"].split()),  # some drivers put newlines into names
+            hostapi=sd.query_hostapis(dev["hostapi"])["name"],
+            samplerate=int(dev["default_samplerate"]),
+            is_default=i == default_in,
+        )
+        for i, dev in enumerate(sd.query_devices())
+        if dev["max_input_channels"] > 0
+    ]
+
+
 def resolve_device(device: str) -> int | str | None:
+    """Config value -> sounddevice argument. Accepts an index, an InputDevice.key, or a name substring."""
     device = device.strip()
     if not device:
         return None
-    return int(device) if device.isdigit() else device
+    if device.isdigit():
+        return int(device)
+    for d in list_input_devices():
+        if d.key == device:
+            return d.index
+    return device
 
 
 def pick_samplerate(device: int | str | None, wanted: int) -> int:

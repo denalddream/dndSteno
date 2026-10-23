@@ -8,6 +8,7 @@ venv/
 
 # Local config and data — never commit recordings
 dndsteno.toml
+dndsteno.log
 sessions/
 *.wav
 *.flac
